@@ -293,3 +293,30 @@ satellogic-MSI-L1D:
       green: 0.545
       blue: 0.480
       nir: 0.825
+sentinel-2-l2a-4band:
+  band_order:
+    - blue    # B2
+    - green   # B3
+    - red     # B4
+    - nir08   # B8
+  rgb_indices:
+    - 2       # red
+    - 1       # green
+    - 0       # blue
+  gsd: 10
+  bands:
+    mean:
+      blue: 1105.
+      green: 1355.
+      red: 1552.
+      nir08: 2743.
+    std:
+      blue: 1809.
+      green: 1757.
+      red: 1888.
+      nir08: 1742.
+    wavelength:
+      blue: 0.493
+      green: 0.56
+      red: 0.665
+      nir08: 0.842

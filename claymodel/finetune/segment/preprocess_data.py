@@ -112,10 +112,10 @@ def main():
     output_dir = Path(sys.argv[2])
     chip_size = int(sys.argv[3])
 
-    train_image_paths = list((data_dir / "train").glob("*_naip-new.tif"))
-    val_image_paths = list((data_dir / "val").glob("*_naip-new.tif"))
-    train_label_paths = list((data_dir / "train").glob("*_lc.tif"))
-    val_label_paths = list((data_dir / "val").glob("*_lc.tif"))
+    train_image_paths = list((data_dir / "train").glob("*_stack.tif"))
+    val_image_paths = list((data_dir / "val").glob("*_stack.tif"))
+    train_label_paths = list((data_dir / "train").glob("*_label.tif"))
+    val_label_paths = list((data_dir / "val").glob("*_label.tif"))
 
     process_files(train_image_paths, output_dir / "train/chips", chip_size)
     process_files(val_image_paths, output_dir / "val/chips", chip_size)
