@@ -8,7 +8,9 @@ import segmentation_models_pytorch as smp
 import torch
 import torch.nn.functional as F
 from torch import optim
-from torchmetrics.classification import F1Score, MulticlassJaccardIndex
+from torchmetrics.classification import F1Score, MulticlassJaccardIndex, BinaryJaccardIndex, BinaryF1Score
+from box import Box
+import yaml
 
 from claymodel.finetune.segment.factory import Segmentor
 
@@ -33,6 +35,8 @@ class ChesapeakeSegmentor(L.LightningModule):
         wd,
         b1,
         b2,
+        metadata_path=None,
+        platform=None,
     ):
         super().__init__()
         self.save_hyperparameters()  # Save hyperparameters for checkpointing
@@ -40,17 +44,34 @@ class ChesapeakeSegmentor(L.LightningModule):
             num_classes=num_classes,
             ckpt_path=ckpt_path,
         )
+        
+        # Load metadata if provided
+        if metadata_path is not None:
+            with open(metadata_path, 'r') as f:
+                self.metadata = Box(yaml.safe_load(f))
+        else:
+            self.metadata = None
+        
+        self.platform = platform
 
-        self.loss_fn = smp.losses.FocalLoss(mode="multiclass")
-        self.iou = MulticlassJaccardIndex(
-            num_classes=num_classes,
-            average="weighted",
-        )
-        self.f1 = F1Score(
-            task="multiclass",
-            num_classes=num_classes,
-            average="weighted",
-        )
+        # Use binary or multiclass based on num_classes
+        if num_classes == 2:
+            # Binary segmentation
+            self.loss_fn = smp.losses.FocalLoss(mode="binary", alpha=0.5)
+            self.iou = BinaryJaccardIndex()
+            self.f1 = BinaryF1Score()
+        else:
+            # Multiclass segmentation
+            self.loss_fn = smp.losses.FocalLoss(mode="multiclass")
+            self.iou = MulticlassJaccardIndex(
+                num_classes=num_classes,
+                average="macro",
+            )
+            self.f1 = F1Score(
+                task="multiclass",
+                num_classes=num_classes,
+                average="macro",
+            )
 
     def forward(self, datacube):
         """
@@ -63,8 +84,19 @@ class ChesapeakeSegmentor(L.LightningModule):
         Returns:
             torch.Tensor: The segmentation logits.
         """
-        waves = torch.tensor([0.65, 0.56, 0.48, 0.842])  # NAIP wavelengths
-        gsd = torch.tensor(1.0)  # NAIP GSD
+        # Extract GSD and wavelengths from metadata if available
+        if self.metadata is not None and self.platform is not None:
+            platform_meta = self.metadata[self.platform]
+            # Get wavelengths in band_order sequence
+            waves = torch.tensor([
+                platform_meta.bands.wavelength[band] 
+                for band in platform_meta.band_order
+            ])
+            gsd = torch.tensor(platform_meta.gsd)
+        else:
+            # Fallback to NAIP defaults (for backward compatibility)
+            waves = torch.tensor([0.65, 0.56, 0.48, 0.842])  # NAIP wavelengths
+            gsd = torch.tensor(1.0)  # NAIP GSD
 
         # Forward pass through the network
         return self.model(
@@ -131,9 +163,20 @@ class ChesapeakeSegmentor(L.LightningModule):
             align_corners=False,
         )  # Resize to match labels size
 
-        loss = self.loss_fn(outputs, labels)
-        iou = self.iou(outputs, labels)
-        f1 = self.f1(outputs, labels)
+        # For binary segmentation, use only the positive class channel (channel 1)
+        # Binary loss expects [B, 1, H, W] shape
+        if self.hparams.num_classes == 2:
+            outputs_binary = outputs[:, 1:2, :, :].contiguous()  # Take only channel 1 (positive class) and make contiguous
+            loss = self.loss_fn(outputs_binary, labels)
+            # Apply sigmoid to convert logits to probabilities, then squeeze to [B, H, W] for metrics
+            outputs_probs = torch.sigmoid(outputs_binary).squeeze(1)  # [B, H, W]
+            iou = self.iou(outputs_probs, labels)
+            f1 = self.f1(outputs_probs, labels)
+        else:
+            # Multiclass case
+            loss = self.loss_fn(outputs, labels)
+            iou = self.iou(outputs, labels)
+            f1 = self.f1(outputs, labels)
 
         # Log metrics
         self.log(

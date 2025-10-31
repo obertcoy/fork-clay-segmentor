@@ -34,12 +34,14 @@ class ChesapeakeDataset(Dataset):
         label_dir (str): Directory containing the labels.
         metadata (Box): Metadata for normalization and other dataset-specific details.
         platform (str): Platform identifier used in metadata.
+        num_classes (int): Number of classes for segmentation.
     """
 
-    def __init__(self, chip_dir, label_dir, metadata, platform):
+    def __init__(self, chip_dir, label_dir, metadata, platform, num_classes=None):
         self.chip_dir = Path(chip_dir)
         self.label_dir = Path(label_dir)
         self.metadata = metadata
+        self.num_classes = num_classes
         self.transform = self.create_transforms(
             mean=list(metadata[platform].bands.mean.values()),
             std=list(metadata[platform].bands.std.values()),
@@ -49,7 +51,8 @@ class ChesapeakeDataset(Dataset):
         self.chips = [chip_path.name for chip_path in self.chip_dir.glob("*.npy")][
             :1000
         ]
-        self.labels = [re.sub("_naip-new_", "_lc_", chip) for chip in self.chips]
+        # self.labels = [re.sub("_naip-new_", "_lc_", chip) for chip in self.chips]
+        self.labels = [re.sub("_stack_", "_crop_label_", chip) for chip in self.chips]
 
     def create_transforms(self, mean, std):
         """
@@ -86,14 +89,28 @@ class ChesapeakeDataset(Dataset):
 
         chip = np.load(chip_name).astype(np.float32)
         label = np.load(label_name)
+        
+        if self.num_classes is not None and self.num_classes > 2:
+            label_mapping = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 15: 6}
+            remapped_label = np.copy(label)
+            for src, dst in label_mapping.items():
+                remapped_label[label == src] = dst
+        else:
+            # Binary case (values already 0 and 1)
+            remapped_label = label
 
-        # Remap labels to match desired classes
-        label_mapping = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 15: 6}
-        remapped_label = np.vectorize(label_mapping.get)(label)
+        # Remove single-band dimension if present
+        if remapped_label.ndim == 3 and remapped_label.shape[0] == 1:
+            remapped_label = remapped_label[0]
+
+
+        # # Remap labels to match desired classes
+        # label_mapping = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 15: 6}
+        # remapped_label = np.vectorize(label_mapping.get)(label)
 
         sample = {
             "pixels": self.transform(torch.from_numpy(chip)),
-            "label": torch.from_numpy(remapped_label[0]),
+            "label": torch.from_numpy(remapped_label),
             "time": torch.zeros(4),  # Placeholder for time information
             "latlon": torch.zeros(4),  # Placeholder for latlon information
         }
@@ -113,6 +130,7 @@ class ChesapeakeDataModule(L.LightningDataModule):
         batch_size (int): Batch size for data loading.
         num_workers (int): Number of workers for data loading.
         platform (str): Platform identifier used in metadata.
+        num_classes (int): Number of classes for segmentation.
     """
 
     def __init__(  # noqa: PLR0913
@@ -125,6 +143,7 @@ class ChesapeakeDataModule(L.LightningDataModule):
         batch_size,
         num_workers,
         platform,
+        num_classes=None,
     ):
         super().__init__()
         self.train_chip_dir = train_chip_dir
@@ -135,6 +154,7 @@ class ChesapeakeDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.platform = platform
+        self.num_classes = num_classes
 
     def setup(self, stage=None):
         """
@@ -149,12 +169,14 @@ class ChesapeakeDataModule(L.LightningDataModule):
                 self.train_label_dir,
                 self.metadata,
                 self.platform,
+                self.num_classes,
             )
             self.val_ds = ChesapeakeDataset(
                 self.val_chip_dir,
                 self.val_label_dir,
                 self.metadata,
                 self.platform,
+                self.num_classes,
             )
 
     def train_dataloader(self):

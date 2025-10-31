@@ -231,6 +231,7 @@ class ClayDataModule(L.LightningDataModule):
             "naip",
             "sentinel-1-rtc",
             "sentinel-2-l2a",
+            "sentinel-2-l2a-4band",
         ],
         batch_size: int = 10,
         num_workers: int = 8,

@@ -1,24 +1,27 @@
 # lightning.pytorch==2.1.2
 seed_everything: 42
 data:
-  train_chip_dir: data/cvpr/ny/train/chips/
-  train_label_dir: data/cvpr/ny/train/labels/
-  val_chip_dir: data/cvpr/ny/val/chips/
-  val_label_dir: data/cvpr/ny/val/labels/
+  train_chip_dir: ../dataset/ready/train/chips/
+  train_label_dir: ../dataset/ready/train/labels/
+  val_chip_dir: ../dataset/ready/val/chips/
+  val_label_dir: ../dataset/ready/val/labels/
   metadata_path: configs/metadata.yaml
   batch_size: 16
   num_workers: 8
-  platform: naip
+  platform: sentinel-2-l2a-4band
+  num_classes: 2
 model:
-  num_classes: 7
+  num_classes: 2
   ckpt_path: checkpoints/clay-v1.5.ckpt
   lr: 1e-5
   wd: 0.05
   b1: 0.9
   b2: 0.95
+  metadata_path: configs/metadata.yaml
+  platform: sentinel-2-l2a-4band
 trainer:
   accelerator: auto
-  strategy: ddp
+  strategy: auto
   devices: auto
   num_nodes: 1
   precision: bf16-mixed
@@ -31,9 +34,9 @@ trainer:
   logger:
     - class_path: lightning.pytorch.loggers.WandbLogger
       init_args:
-        entity: developmentseed
-        project: clay-segment
-        group: v1.5
+        entity: obertvalid-val-id
+        project: finetune-segment-clay
+        group: fixed-platform
         log_model: false
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
