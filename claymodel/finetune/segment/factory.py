@@ -139,7 +139,17 @@ class Segmentor(nn.Module):
         ckpt_path (str): Path to the checkpoint file.
     """
 
-    def __init__(self, num_classes, ckpt_path):
+    def __init__(self, num_classes, ckpt_path, unfreeze_layers=None):
+        """
+        Initialize the Segmentor.
+
+        Args:
+            num_classes (int): Number of output classes for segmentation.
+            ckpt_path (str): Path to the checkpoint file.
+            unfreeze_layers (list, optional): List of layer indices to unfreeze.
+                Layer indices are 0-based (e.g., [22, 23] for last 2 layers).
+                If None, all encoder layers remain frozen. Defaults to None.
+        """
         super().__init__()
         # Default values are for the clay mae base model.
         self.encoder = SegmentEncoder(
@@ -154,9 +164,13 @@ class Segmentor(nn.Module):
             ckpt_path=ckpt_path,
         )
 
-        # Freeze the encoder parameters
+        # Freeze all encoder parameters first
         for param in self.encoder.parameters():
             param.requires_grad = False
+
+        # Unfreeze specified layers
+        if unfreeze_layers is not None:
+            self.unfreeze_encoder_layers(unfreeze_layers)
 
         # Define layers after the encoder
         D = self.encoder.dim  # embedding dimension
@@ -171,6 +185,25 @@ class Segmentor(nn.Module):
         self.conv_ps = nn.Conv2d(hidden_dim, C_out * r * r, kernel_size=3, padding=1)
         self.pixel_shuffle = nn.PixelShuffle(upscale_factor=r)
         self.conv_out = nn.Conv2d(C_out, num_classes, kernel_size=3, padding=1)
+
+    def unfreeze_encoder_layers(self, layer_indices):
+        """
+        Unfreeze specific encoder transformer layers.
+
+        Args:
+            layer_indices (list): List of layer indices to unfreeze (0-based).
+                For example, [22, 23] unfreezes the last 2 layers.
+        """
+        num_layers = len(self.encoder.transformer.layers)
+        for layer_idx in layer_indices:
+            if layer_idx < 0 or layer_idx >= num_layers:
+                print(f"Warning: Layer index {layer_idx} is out of range [0, {num_layers-1}]. Skipping.")
+                continue
+            # Unfreeze the attention and feedforward modules in this layer
+            for module in self.encoder.transformer.layers[layer_idx]:
+                for param in module.parameters():
+                    param.requires_grad = True
+        print(f"Unfrozen encoder layers: {layer_indices}")
 
     def forward(self, datacube):
         """
