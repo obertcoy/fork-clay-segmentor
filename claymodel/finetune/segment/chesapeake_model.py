@@ -14,6 +14,45 @@ import yaml
 
 from claymodel.finetune.segment.factory import Segmentor
 
+class DiceFocalLoss(torch.nn.Module):
+    def __init__(self, mode='multiclass', alpha=None, gamma=2.0, dice_weight=1.0, focal_weight=1.0):
+        super().__init__()
+        self.dice = smp.losses.DiceLoss(mode=mode)
+        self.focal = smp.losses.FocalLoss(mode=mode, alpha=alpha, gamma=gamma)
+        self.w_dice = dice_weight
+        self.w_focal = focal_weight
+
+    def forward(self, y_pred, y_true):
+        dice = self.dice(y_pred, y_true)
+        focal = self.focal(y_pred, y_true)
+        return self.w_dice * dice + self.w_focal * focal
+    
+class DiceBCELoss(torch.nn.Module):
+    def __init__(self, dice_weight=1.0, bce_weight=1.0):
+        super().__init__()
+        self.dice = smp.losses.DiceLoss(mode="binary")
+        self.bce = smp.losses.SoftBCEWithLogitsLoss()
+        self.w_dice = dice_weight
+        self.w_bce = bce_weight
+
+    def forward(self, y_pred, y_true):
+        dice = self.dice(y_pred, y_true)
+        bce = self.bce(y_pred, y_true)
+        return self.w_dice * dice + self.w_bce * bce
+    
+class WeightedDiceCELoss(torch.nn.Module):
+    def __init__(self, mode='multiclass', class_weights=None, dice_weight=1.0, ce_weight=1.0):
+        super().__init__()
+        self.dice = smp.losses.DiceLoss(mode=mode)
+        self.ce = torch.nn.CrossEntropyLoss(weight=torch.tensor(class_weights) if class_weights else None)
+        self.w_dice = dice_weight
+        self.w_ce = ce_weight
+
+    def forward(self, y_pred, y_true):
+        dice = self.dice(y_pred, y_true)
+        ce = self.ce(y_pred, y_true)
+        return self.w_dice * dice + self.w_ce * ce
+
 
 class ChesapeakeSegmentor(L.LightningModule):
     """
@@ -37,12 +76,14 @@ class ChesapeakeSegmentor(L.LightningModule):
         b2,
         metadata_path=None,
         platform=None,
+        unfreeze_layers=None,
     ):
         super().__init__()
         self.save_hyperparameters()  # Save hyperparameters for checkpointing
         self.model = Segmentor(
             num_classes=num_classes,
             ckpt_path=ckpt_path,
+            unfreeze_layers=unfreeze_layers,
         )
         
         # Load metadata if provided
@@ -55,14 +96,18 @@ class ChesapeakeSegmentor(L.LightningModule):
         self.platform = platform
 
         # Use binary or multiclass based on num_classes
-        if num_classes == 2:
+        if num_classes == 1:
             # Binary segmentation
-            self.loss_fn = smp.losses.FocalLoss(mode="binary", alpha=0.5)
-            self.iou = BinaryJaccardIndex()
-            self.f1 = BinaryF1Score()
+            binary_threshold = 0.5
+            self.loss_fn = smp.losses.FocalLoss(mode="binary", alpha=0.25, gamma=2.0)
+            self.iou = BinaryJaccardIndex(threshold=binary_threshold)
+            self.f1 = BinaryF1Score(threshold=binary_threshold)
         else:
             # Multiclass segmentation
-            self.loss_fn = smp.losses.FocalLoss(mode="multiclass")
+            # self.loss_fn = smp.losses.FocalLoss(mode="multiclass")
+            self.loss_fn = DiceFocalLoss(mode="multiclass", gamma=2.0)
+            # self.loss_fn = torch.nn.CrossEntropyLoss(weight=torch.tensor([0.2, 0.8]))
+            # self.loss_fn = WeightedDiceCELoss(mode="multiclass")
             self.iou = MulticlassJaccardIndex(
                 num_classes=num_classes,
                 average="macro",
@@ -72,6 +117,17 @@ class ChesapeakeSegmentor(L.LightningModule):
                 num_classes=num_classes,
                 average="macro",
             )
+            
+        # self.loss_fn = smp.losses.FocalLoss(mode="multiclass")
+        # self.iou = MulticlassJaccardIndex(
+        #     num_classes=num_classes,
+        #     average="macro",
+        # )
+        # self.f1 = F1Score(
+        #     task="multiclass",
+        #     num_classes=num_classes,
+        #     average="macro",
+        # )    
 
     def forward(self, datacube):
         """
@@ -163,20 +219,21 @@ class ChesapeakeSegmentor(L.LightningModule):
             align_corners=False,
         )  # Resize to match labels size
 
-        # For binary segmentation, use only the positive class channel (channel 1)
-        # Binary loss expects [B, 1, H, W] shape
-        if self.hparams.num_classes == 2:
-            outputs_binary = outputs[:, 1:2, :, :].contiguous()  # Take only channel 1 (positive class) and make contiguous
-            loss = self.loss_fn(outputs_binary, labels)
-            # Apply sigmoid to convert logits to probabilities, then squeeze to [B, H, W] for metrics
-            outputs_probs = torch.sigmoid(outputs_binary).squeeze(1)  # [B, H, W]
-            iou = self.iou(outputs_probs, labels)
-            f1 = self.f1(outputs_probs, labels)
+
+        if self.hparams.num_classes == 1:
+            labels = batch["label"].unsqueeze(1)
+            loss = self.loss_fn(outputs, labels.float())
+            iou = self.iou(outputs, labels)
+            f1 = self.f1(outputs, labels)
         else:
             # Multiclass case
             loss = self.loss_fn(outputs, labels)
             iou = self.iou(outputs, labels)
             f1 = self.f1(outputs, labels)
+
+        # loss = self.loss_fn(outputs, labels)
+        # iou = self.iou(outputs, labels)
+        # f1 = self.f1(outputs, labels)
 
         # Log metrics
         self.log(
@@ -233,3 +290,4 @@ class ChesapeakeSegmentor(L.LightningModule):
             torch.Tensor: The loss value.
         """
         return self.shared_step(batch, batch_idx, "val")
+    

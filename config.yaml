@@ -1,0 +1,127 @@
+# lightning.pytorch==2.5.5
+seed_everything: 42
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: bf16-mixed
+  logger:
+  - class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      name: null
+      save_dir: .
+      version: null
+      offline: false
+      dir: null
+      id: null
+      anonymous: null
+      project: finetune-segment-clay
+      log_model: false
+      experiment: null
+      prefix: ''
+      checkpoint_name: null
+      entity: obertvalid-val-id
+      notes: null
+      tags: null
+      config: null
+      config_exclude_keys: null
+      config_include_keys: null
+      allow_val_change: null
+      group: multiclass-cross-entropy-loss
+      job_type: null
+      mode: null
+      force: null
+      reinit: null
+      resume: null
+      resume_from: null
+      fork_from: null
+      save_code: null
+      tensorboard: null
+      sync_tensorboard: null
+      monitor_gym: null
+      settings: null
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+    init_args:
+      dirpath: checkpoints/segment
+      filename: chesapeake-7class-segment_epoch-{epoch:02d}_val-iou-{val/iou:.4f}
+      monitor: val/iou
+      verbose: true
+      save_last: true
+      save_top_k: 2
+      save_on_exception: false
+      save_weights_only: true
+      mode: max
+      auto_insert_metric_name: false
+      every_n_train_steps: null
+      train_time_interval: null
+      every_n_epochs: null
+      save_on_train_epoch_end: null
+      enable_version_counter: true
+  - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    init_args:
+      logging_interval: step
+      log_momentum: false
+      log_weight_decay: false
+  fast_dev_run: false
+  max_epochs: 100
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: null
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  log_every_n_steps: 5
+  enable_checkpointing: null
+  enable_progress_bar: null
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: null
+  gradient_clip_algorithm: null
+  deterministic: null
+  benchmark: null
+  inference_mode: true
+  use_distributed_sampler: true
+  profiler: null
+  detect_anomaly: false
+  barebones: false
+  plugins:
+  - class_path: lightning.pytorch.plugins.io.AsyncCheckpointIO
+    init_args:
+      checkpoint_io: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 0
+  default_root_dir: checkpoints/segment
+  model_registry: null
+model:
+  num_classes: 2
+  ckpt_path: checkpoints/clay-v1.5.ckpt
+  lr: 1.0e-05
+  wd: 0.05
+  b1: 0.9
+  b2: 0.95
+  metadata_path: configs/metadata.yaml
+  platform: sentinel-2-l2a-4band
+  unfreeze_layers:
+  - 22
+  - 23
+data:
+  train_chip_dir: ../dataset/ready/train/chips/
+  train_label_dir: ../dataset/ready/train/labels/
+  val_chip_dir: ../dataset/ready/val/chips/
+  val_label_dir: ../dataset/ready/val/labels/
+  metadata_path: configs/metadata.yaml
+  batch_size: 16
+  num_workers: 8
+  platform: sentinel-2-l2a-4band
+  num_classes: 2
+optimizer: null
+lr_scheduler: null
+ckpt_path: null

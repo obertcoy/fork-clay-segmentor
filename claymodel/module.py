@@ -81,17 +81,59 @@ class ClayMAEModule(L.LightningModule):
         return self.model(datacube)
 
     def configure_optimizers(self):
+        """
+        Configure optimizer with layer-specific learning rates.
+        """
+        # Group parameters by layer type
+        decoder_params = []
+        encoder_layers_23_24 = []  # Last 2 layers
+        encoder_layers_21_22 = []  # Second-to-last 2 layers
+        
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+                
+            if 'encoder' in name:
+                if 'transformer.layers.22' in name or 'transformer.layers.23' in name:
+                    encoder_layers_23_24.append(param)
+                elif 'transformer.layers.20' in name or 'transformer.layers.21' in name:
+                    encoder_layers_21_22.append(param)
+            else:
+                decoder_params.append(param)
+        
+        # Different learning rates for different groups
+        # Typically: decoder > encoder_late > encoder_early
+        param_groups = [
+            {
+                'params': decoder_params,
+                'lr': self.hparams.lr,  # Full LR for decoder
+                'weight_decay': self.hparams.wd,
+            },
+            {
+                'params': encoder_layers_23_24,
+                'lr': self.hparams.lr / 5,  # Higher LR for last layers
+                'weight_decay': self.hparams.wd,
+            },
+            {
+                'params': encoder_layers_21_22,
+                'lr': self.hparams.lr / 10,  # Lower LR for earlier unfrozen layers
+                'weight_decay': self.hparams.wd,
+            },
+        ]
+        
         optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.wd,
+            param_groups,
             betas=(self.hparams.b1, self.hparams.b2),
-            fused=True,
         )
+        
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer, T_0=5000, T_mult=1, eta_min=self.hparams.lr * 100, last_epoch=-1
+            optimizer,
+            T_0=100,
+            T_mult=1,
+            eta_min=self.hparams.lr * 100,  # FIXED!
+            last_epoch=-1,
         )
-
+        
         return {
             "optimizer": optimizer,
             "lr_scheduler": {

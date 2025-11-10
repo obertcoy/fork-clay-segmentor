@@ -23,7 +23,8 @@ import yaml
 from box import Box
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2
-
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 class ChesapeakeDataset(Dataset):
     """
@@ -37,7 +38,7 @@ class ChesapeakeDataset(Dataset):
         num_classes (int): Number of classes for segmentation.
     """
 
-    def __init__(self, chip_dir, label_dir, metadata, platform, num_classes=None):
+    def __init__(self, chip_dir, label_dir, metadata, platform, num_classes=None, is_training=False):
         self.chip_dir = Path(chip_dir)
         self.label_dir = Path(label_dir)
         self.metadata = metadata
@@ -46,6 +47,8 @@ class ChesapeakeDataset(Dataset):
             mean=list(metadata[platform].bands.mean.values()),
             std=list(metadata[platform].bands.std.values()),
         )
+        self.is_training = is_training
+        self.augmentation = self.create_augmentation() if is_training else None
 
         # Load chip and label file names
         self.chips = [chip_path.name for chip_path in self.chip_dir.glob("*.npy")][
@@ -53,7 +56,10 @@ class ChesapeakeDataset(Dataset):
         ]
         # self.labels = [re.sub("_naip-new_", "_lc_", chip) for chip in self.chips]
         self.labels = [re.sub("_stack_", "_crop_label_", chip) for chip in self.chips]
-
+        
+        if is_training:
+            self.sample_non_empty_chips(keep_empty_ratio=0.25)
+        
     def create_transforms(self, mean, std):
         """
         Create normalization transforms.
@@ -70,6 +76,62 @@ class ChesapeakeDataset(Dataset):
                 v2.Normalize(mean=mean, std=std),
             ],
         )
+        
+    def create_augmentation(self):
+        """
+        Create augmentation transforms.
+
+        Returns:
+            albumentations.Compose: A composition of augmentation transforms.
+        """
+        return A.Compose([
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.RandomRotate90(p=0.5),
+            # A.Affine(
+            #     translate_percent=0.1,  # equivalent to shift_limit
+            #     scale=(0.8, 1.2),       # equivalent to scale_limit
+            #     rotate=(-15, 15),
+            #     mode=0,                 # fill value for image
+            #     cval=0,                 # same as mode=0
+            #     mask_value=0,             # fill value for mask
+            #     p=0.3,
+            # )
+        ])
+        
+    def sample_non_empty_chips(self, keep_empty_ratio=0.5):
+        """
+        Sample non-empty chips from the dataset.
+        """
+        valid_chips, valid_labels = [], []
+        num_empty, num_nonempty = 0, 0
+
+        for chip_name, label_name in zip(self.chips, self.labels):
+            label_path = self.label_dir / label_name
+            if not label_path.exists():
+                continue
+
+            label = np.load(label_path, mmap_mode="r")  # faster than loading into RAM fully
+
+            if np.any(label > 0):
+                num_nonempty += 1
+                valid_chips.append(chip_name)
+                valid_labels.append(label_name)
+            else:
+                num_empty += 1
+                if np.random.rand() < keep_empty_ratio:
+                    valid_chips.append(chip_name)
+                    valid_labels.append(label_name)
+
+        print(
+            f"[INFO] Filtered dataset: {len(valid_chips)} / {len(self.chips)} kept "
+            f"({100 * len(valid_chips) / len(self.chips):.1f}%). "
+            f"Non-empty: {num_nonempty}, Empty: {num_empty}, "
+            f"Kept {keep_empty_ratio*100:.0f}% of empty."
+        )
+
+        self.chips = valid_chips
+        self.labels = valid_labels
 
     def __len__(self):
         return len(self.chips)
@@ -108,9 +170,27 @@ class ChesapeakeDataset(Dataset):
         # label_mapping = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 15: 6}
         # remapped_label = np.vectorize(label_mapping.get)(label)
 
+        # Augmentation
+        if self.is_training:
+            chip = np.transpose(chip, (1, 2, 0))
+            
+            augmented = self.augmentation(image=chip, mask=remapped_label)
+            chip_aug = augmented["image"]  # (H, W, C)
+            label_aug = augmented["mask"]  # (H, W)
+
+            chip_tensor = torch.from_numpy(np.transpose(chip_aug, (2, 0, 1))).float()  # (C, H, W)
+            remapped_label = torch.from_numpy(label_aug) # (H, W)
+
+            pixels = self.transform(chip_tensor)
+            
+        else:
+            # No Augmentation
+            pixels = self.transform(torch.from_numpy(chip))
+            remapped_label = torch.from_numpy(remapped_label)
+                        
         sample = {
-            "pixels": self.transform(torch.from_numpy(chip)),
-            "label": torch.from_numpy(remapped_label),
+            "pixels": pixels,
+            "label": remapped_label,
             "time": torch.zeros(4),  # Placeholder for time information
             "latlon": torch.zeros(4),  # Placeholder for latlon information
         }
@@ -170,6 +250,7 @@ class ChesapeakeDataModule(L.LightningDataModule):
                 self.metadata,
                 self.platform,
                 self.num_classes,
+                is_training=True,
             )
             self.val_ds = ChesapeakeDataset(
                 self.val_chip_dir,
@@ -177,6 +258,7 @@ class ChesapeakeDataModule(L.LightningDataModule):
                 self.metadata,
                 self.platform,
                 self.num_classes,
+                is_training=False,
             )
 
     def train_dataloader(self):
